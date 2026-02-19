@@ -13,6 +13,7 @@ It is dissected here for educational purposes.
 1. [Dataset](#1-dataset)
 2. [Tokenizer](#2-tokenizer)
 3. [Autograd](#3-autograd-the-hardcore-section-that-enables-backprogagation-or-implementing-what-pytorch-gives-you-for-free)
+4. [Parameters](#4-parameters-neurons)
 
 ## 1. Dataset
 
@@ -50,7 +51,7 @@ sample 10: kaina
 
 From ChatGPT's PoV, a conversation is just a differently structured document. When a document is initialized with a particular prompt, the model's response is a statistical document completion.
 
-### Run
+### Run dataset
 
 Run the [`dataset`](src/my_microgpt/dataset.py) module:
 
@@ -77,7 +78,7 @@ As training continues, the model will learn the pattern "a BOS token initiates a
 
 The final vocabulary has 27 tokens (26 lowercase characters a-z + 1 BOS token). The BOS won't have representation in the chars tuple, but we'll use it as an index in the encoding/decoding process.
 
-### Run
+### Run tokenization
 
 Run the [`tokenization`](src/my_microgpt/tokenization.py) module:
 
@@ -140,10 +141,58 @@ The gradients encode the direction (sign) and steepness (magnitude) of each para
 
 So, as shown above, if `L = a*b + a`, being `a=2` and `b=3`, then `a.grad = 4.0` tells us about the local influence of `a` on `L`. If we wiggle the input `a`, in what direction is `L` changing? Here, the derivative of `L` w.r.t. `a` is `4.0`, meaning that if we increase `a` by a tiny amount (say `0.001`), `L` would increase by about **4x** that (`0.004`). Similarly, `b.grad = 2.0` means the same nudge to `b` would increase `L` by about **2x** that (`0.002`).
 
-### Run
+### Run autograd
 
 Run the [`autograd`](src/my_microgpt/autograd.py) module:
 
 ```bash
 uv run autograd
+```
+
+## 4. Parameters (Neurons)
+
+**Parameters** can be seen as the neurons that hold the knowledge of the model. These floating-point numbers, wrapped in `Value` class for getting autograd, are going to be iteratively optimized during training through the learning process provided by the forward and backward progagation passes.
+
+The so-called **hyperparameters** control the architecture shape:
+
+- `n_embd = 16` — embedding dimension
+- `n_head = 4` — number of attention heads
+- `n_layer = 1` — number of layers
+- `block_size = 16` — maximum sequence length
+- `head_dim = n_embd // n_head` — dimension of each head
+
+Parameters are initialized to random numbers drawn from a **Gaussian**, and they're gonna be organized into matrices. The `state_dict` structure organizes those matrices in: embedding tables (`wte`, `wpe`), attention weights (`attn_wq`, `attn_wk`, `attn_wv`, `attn_wo`), MLP weights (`mlp_fc1`, `mlp_fc2`), and a final output projection (`lm_head`). All parameters are also flattened into a single list `params` so the optimizer can loop over them later.
+
+The weight matrices are stored as `(nout, nin)` following PyTorch's convention: each row holds the weights for one output neuron, so the forward pass is `output = W @ input`.
+
+```text
+state_dict (default config: n_embd=16, n_head=4, n_layer=1, block_size=16)
+├── Embeddings
+│   ├── wte              27 x 16     token embeddings (vocab_size x n_embd)
+│   └── wpe              16 x 16     position embeddings (block_size x n_embd)
+│
+├── Layer 0
+│   ├── Attention
+│   │   ├── attn_wq      16 x 16     query projection (n_embd x n_embd)
+│   │   ├── attn_wk      16 x 16     key projection
+│   │   ├── attn_wv      16 x 16     value projection
+│   │   └── attn_wo      16 x 16     output projection
+│   └── MLP
+│       ├── mlp_fc1      64 x 16     expand (4*n_embd x n_embd)
+│       └── mlp_fc2      16 x 64     contract (n_embd x 4*n_embd)
+│
+└── Output
+    └── lm_head          27 x 16     final projection (vocab_size x n_embd)
+
+Total: 4,192 parameters
+```
+
+With our default configuration and a vocabulary of 27 tokens, this comes out to 4,192 parameters. For comparison GPT-2 had ~1.6 billion.
+
+### Run parameters
+
+Run the [`parameters`](src/my_microgpt/parameters.py) module:
+
+```bash
+uv run parameters
 ```
