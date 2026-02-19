@@ -14,6 +14,7 @@ It is dissected here for educational purposes.
 2. [Tokenizer](#2-tokenizer)
 3. [Autograd](#3-autograd-the-hardcore-section-that-enables-backprogagation-or-implementing-what-pytorch-gives-you-for-free)
 4. [Parameters](#4-parameters-neurons)
+5. [Architecture](#5-architecture)
 
 ## 1. Dataset
 
@@ -195,4 +196,89 @@ Run the [`parameters`](src/my_microgpt/parameters.py) module:
 
 ```bash
 uv run parameters
+```
+
+## 5. Architecture
+
+The model architecture is implemented as a stateless function: it takes a token, a position, the parameters, and the cached keys/values from previous positions, and returns scores (a.k.a. logits) over what token should come next.
+
+This schema, follows the GPT-2 architecture with minor simplifications: RMSNorm vs. LayerNorm, no biases, and ReLU vs. GeLU.
+
+### Helper Functions
+
+Three building blocks used throughout the architecture:
+
+- **`rmsnorm(x)`** — Root Mean Square Normalization. Rescales a vector so its values have unit RMS. Keeps activations from growing or shrinking through the network, stabilizing training. A I said before, a simpler variant of LayerNorm used in GPT-2.
+- **`linear(x, w)`** — matrix (`w`) vector (`x`) multiply. One dot product per row of `w`. The learned linear transformatio is the core building block of neural networks.
+- **`softmax(logits)`** — converts raw scores (logits), which can range from -inf to +inf, into a probability distribution: all values in [0, 1] and adding up to 1. The max is subtracted first for numerical stability.
+
+### Forward Pass
+
+The `gpt()` function processes one token at a specific position, with context from previous iterations summarized in the KV cache:
+
+```text
+token_id + pos_id
+       │
+       ▼
+┌─────────────┐
+│  Embeddings │  wte[token_id] + wpe[pos_id]
+│  + rmsnorm  │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────────────────────────┐
+│  Transformer Layer (x n_layer)  │
+│                                 │
+│  ┌───────────────────────┐      │
+│  │  Multi-Head Attention │      │
+│  │  Q, K, V projections  │      │
+│  │  + KV cache append    │◄─── keys[li], values[li]
+│  │  + scaled dot-product │      │
+│  │  + softmax weights    │      │
+│  │  + output projection  │      │
+│  └───────────┬───────────┘      │
+│              + residual         │
+│  ┌───────────┴───────────┐      │
+│  │  MLP Block            │      │
+│  │  fc1 (expand 4x)      │      │
+│  │  + ReLU               │      │
+│  │  fc2 (contract)       │      │
+│  └───────────┬───────────┘      │
+│              + residual         │
+└──────────────┬──────────────────┘
+               │
+               ▼
+┌─────────────────┐
+│  lm_head linear │  → logits (27 scores, one per vocab token)
+└─────────────────┘
+```
+
+### Step by step
+
+1. **Embeddings** The token id and position id each look up a row from their embedding tables (`wte` and `wpe`). These two vectors are added, giving the model a representation that encodes both *what* the token is (`wte`) and *where* it is in the sequence (`wpe`).
+
+2. **Attention block** The current token is projected into three full-size vectors (each `n_embd=16`): a query (Q), a key (K), and a value (V). Q says "what am I looking for?", K "what do I contain?", and V "what do I offer if selected?". Keys and values are appended to the KV cache so previous positions are available.
+
+   These vectors are then split into `n_head=4` chunks of `head_dim=4` each. Each head operates on its own slice of the embedding, attending to different aspects of the token in parallel. For example, one head might learn to track vowel patterns, another consonant clusters, another positional regularities. A single head over all 16 dimensions would compute one attention pattern per cached position — one set of weights deciding what to focus on. By splitting into 4 heads, the model computes 4 independent attention patterns simultaneously, each learning to focus on different relationships in the data. The total computation is the same (each head does a 4-dim dot product instead of one head doing a 16-dim dot product), but the model gains representational diversity.
+
+   Each head computes scaled dot products between its query slice and all cached key slices, applies softmax to get attention weights, then takes a weighted sum of cached value slices. All head outputs are concatenated back into a single `n_embd`-sized vector and projected through `attn_wo`. Attention is the only place where tokens at different (past) positions communicate (See clarification below!).
+
+    **No causal mask is needed!!!** In this impelementation tokens are processed one at a time, so the KV cache only contains positions 0..t (current and past). Future positions simply don't exist in the cache, so causality is implicit. In standard GPT architectures that process all positions in parallel, an explicit mask is required to prevent attending to future tokens.
+
+3. **MLP block** Two-layer feed-forward network that processes each position independently. First, `mlp_fc1` projects the embedding up to 4x its dimension (16 to 64), expanding into a higher-dimensional space where the model can represent more complex patterns. ReLU then introduces non-linearity/ Without it, stacking linear layers would collapse into a single linear transformation, and the network could only learn linear relationships. Finally, `mlp_fc2` projects back down to the original dimension. If attention is how tokens *talk to each other*, the MLP is where each token *thinks about what it heard*, transforming the gathered information into useful features for the next layer or the final prediction.
+
+4. **Residual connections** Both blocks add their output back to their input. This residuals lets gradients flow directly through the network and makes deeper models trainable.
+
+5. **Output** The final hidden state is projected to vocabulary size by `lm_head`, producing one logit per token. Higher logit = the model thinks that token is more likely to come next.
+
+**Note on the KV cache during training:** Referring to the KV cache during training is kind of unusual; it's typically associated with inference only. However, the KV cache is conceptually always there; in production implementations it's hidden inside vectorized attention that processes all positions simultaneously.
+
+Since AK's microgpt processes one token at a time, the KV cache is built explicitly. Unlike typical inference where cached tensors are detached, here the cached keys and values are live `Value` nodes in the computation graph, so gradients backpropagate through them.
+
+### Run architecture
+
+Run the [`architecture`](src/my_microgpt/architecture.py) module:
+
+```bash
+uv run architecture
 ```

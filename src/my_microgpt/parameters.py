@@ -8,7 +8,7 @@ from my_microgpt.autograd import Value
 DEFAULT_N_EMBD = 16
 DEFAULT_N_HEAD = 4
 DEFAULT_N_LAYER = 1
-DEFAULT_BLOCK_SIZE = 16
+DEFAULT_BLOCK_SIZE = 16  # maximum sequence length
 DEFAULT_INIT_STD = 0.08
 
 Matrix = list[list[Value]]
@@ -23,15 +23,15 @@ def make_matrix(nout: int, nin: int, std: float = DEFAULT_INIT_STD) -> Matrix:
 class ModelConfig:
     """Hyperparameters that define the model architecture."""
 
-    n_embd: int = DEFAULT_N_EMBD
-    n_head: int = DEFAULT_N_HEAD
-    n_layer: int = DEFAULT_N_LAYER
-    block_size: int = DEFAULT_BLOCK_SIZE
-    init_std: float = DEFAULT_INIT_STD
+    n_embd: int = DEFAULT_N_EMBD  # embedding dimension
+    n_head: int = DEFAULT_N_HEAD  # number of attention heads
+    n_layer: int = DEFAULT_N_LAYER  # number of layers
+    block_size: int = DEFAULT_BLOCK_SIZE  # maximum sequence length
+    init_std: float = DEFAULT_INIT_STD  # standard deviation for weight initialization
 
     @property
     def head_dim(self) -> int:
-        return self.n_embd // self.n_head
+        return self.n_embd // self.n_head  # Dimension of each head. Dimension: n_embd // n_head
 
 
 @dataclass
