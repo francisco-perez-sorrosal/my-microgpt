@@ -16,6 +16,7 @@ It is dissected here for educational purposes.
 4. [Parameters](#4-parameters-neurons)
 5. [Architecture](#5-architecture)
 6. [Training Loop](#6-training-loop)
+7. [Inference](#7-inference)
 
 ## 1. Dataset
 
@@ -302,7 +303,7 @@ Each document picked is wrapped with BOS on both sides: the name "fran" becomes 
 
 ### Forward Pass and Loss Calculation
 
-Each token is fed through the model one at a time, building up the KV cache as we go. At each position, the model outputs 27 logits; then they are converted to probabilities via softmax. The loss at each position is calculated as the negative log probability of where the correct next token is in the list of predicted tokens: `-log(p(target))`. This is called the **cross-entropy loss** and measures the degree of misprediction: how surprised the model is by what actually comes next. If the model assigns probability 1.0 to the correct token, the loss is 0. If it assigns probability close to 0, the loss goes to infinity. 
+Each token is fed through the model one at a time, building up the KV cache as we go. At each position, the model outputs 27 logits; then they are converted to probabilities via softmax. The loss at each position is calculated as the negative log probability of where the correct next token is in the list of predicted tokens: `-log(p(target))`. This is called the **cross-entropy loss** and measures the degree of misprediction: how surprised the model is by what actually comes next. If the model assigns probability 1.0 to the correct token, the loss is 0. If it assigns probability close to 0, the loss goes to infinity.
 
 Finally, each loss in each token position is sum and averaged across the document to get a single scalar loss.
 
@@ -331,4 +332,27 @@ Run the [`training`](src/my_microgpt/training.py) module:
 
 ```bash
 uv run training
+```
+
+## 7. Inference
+
+After training, the parameters are frozen. Inference is just the forward pass run in a loop: each generated token is fed back as the next input.
+
+Each sample starts with the BOS token — telling the model "begin a new name." The model produces 27 logits (one per vocabulary token), which are converted to probabilities via softmax. One token is randomly sampled according to those probabilities and fed back as the next input. This repeats until the model produces BOS again ("I'm done") or the sequence reaches the maximum length.
+
+### Temperature
+
+Temperature divides the logits before the softmax:
+
+- **Temperature 1.0** — model's learned distribution, unmodified
+- **Temperature < 1.0** (e.g. 0.5) — sharpens the distribution; the model becomes more conservative, favoring high-probability tokens
+- **Temperature near 0.0** — greedy decoding; always picks the single most likely token
+- **Temperature > 1.0** — flattens the distribution; more diverse but less coherent output
+
+### Run inference
+
+Run the [`inference`](src/my_microgpt/inference.py) module:
+
+```bash
+uv run inference
 ```

@@ -18,6 +18,7 @@ autograd = "my_microgpt.autograd:main"
 parameters = "my_microgpt.parameters:main"
 architecture = "my_microgpt.architecture:main"
 training = "my_microgpt.training:main"
+inference = "my_microgpt.inference:main"
 
 [build-system]
 requires = ["hatchling"]
