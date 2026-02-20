@@ -17,6 +17,7 @@ It is dissected here for educational purposes.
 5. [Architecture](#5-architecture)
 6. [Training Loop](#6-training-loop)
 7. [Inference](#7-inference)
+8. [microgpt vs Big GPTs](#8-microgpt-vs-big-gpts)
 
 ## 1. Dataset
 
@@ -336,18 +337,18 @@ uv run training
 
 ## 7. Inference
 
-After training, the parameters are frozen. Inference is just the forward pass run in a loop: each generated token is fed back as the next input.
+After training we have our model ready to test. The parameters are frozen and are not going to be modified in the next step; Inference exercises only forward pass run in a loop: each generated token is fed back as the next input.
 
-Each sample starts with the BOS token — telling the model "begin a new name." The model produces 27 logits (one per vocabulary token), which are converted to probabilities via softmax. One token is randomly sampled according to those probabilities and fed back as the next input. This repeats until the model produces BOS again ("I'm done") or the sequence reaches the maximum length.
+Each sample starts with the BOS token, in a way nudging the model to "begin a new name." At the end of the first iteration, the model comes up with the 27 logits of the vocabulary (converted to probabilities via softmax), and then a single token is randomly sampled according to those probabilities and fed back as the next input. This loop repeats until the BOS token is produced again (in a way saying "I'm done") or the sequence reaches the maximum length.
 
-### Temperature
+### The Effect of Temperature
 
 Temperature divides the logits before the softmax:
 
-- **Temperature 1.0** — model's learned distribution, unmodified
-- **Temperature < 1.0** (e.g. 0.5) — sharpens the distribution; the model becomes more conservative, favoring high-probability tokens
-- **Temperature near 0.0** — greedy decoding; always picks the single most likely token
-- **Temperature > 1.0** — flattens the distribution; more diverse but less coherent output
+- **Temperature 1.0** the model's learned distribution, unmodified
+- **Temperature < 1.0** (e.g. 0.5) sharpens the distribution; the model becomes more conservative, favoring high-probability tokens
+- **Temperature near 0.0** greedy decoding; always picks the single most likely token
+- **Temperature > 1.0** flattens the distribution; more diverse but less coherent output
 
 ### Run inference
 
@@ -356,3 +357,63 @@ Run the [`inference`](src/my_microgpt/inference.py) module:
 ```bash
 uv run inference
 ```
+
+## 8. microgpt vs Big GPTs
+
+The goal of microgpt is reproduce the core of the algorithm behind GPT models.
+
+Productionizing this is to become something similar to ChatGPT or Claude comes with a lot of engineering effort. Despite the essence is there, those engineering "works" are what makes the GPT work at scale. Hre's a brief summary following the same sections above:
+
+**[Data](#1-dataset)** Production models train on trillions of tokens of internet text: web pages, books, code, ... Data curation (deduplication, apply filters for quality, mix across domains) is a huge and very important part of the process of getting a final model. Otherwise garbage-in, garbage-out applies.
+
+**[Tokenizer](#2-tokenizer)** Our tokenizer here is very simple; it uses single characters for education purposes, but GPTs in production use subword tokenizers like Byte Pair Encoding (BPE), which first learn to merge frequently co-occurring character sequences into single tokens to be more efficient when chunking the text. Common words like "the" are identified by the BPE algorithm as a single token; however, rare words get broken into pieces. The final vocabulary of production models is ~100K tokens instead of 27 of microgpt, but it is much more efficient because the model sees more content per position.
+
+**[Autograd](#3-autograd-the-hardcore-section-that-enables-backprogagation-or-implementing-what-pytorch-gives-you-for-free)** microgpt operates on scalar `Value` objects in Python. In GPTs tensors are used. Tensors are just large multi-dimensional arrays of numbers, and run efficiently on GPUs/TPUs which are designed to perform billions of FLOPs/s. Frameworks like PyTorch or JAX come with equipped with autograd by default so the model builders don't have to worry about that. And underlying CUDA kernels like FlashAttention are optimized fuse multiple operations for speed in the GPUs/TPUs. But in the end the math is identical, just corresponds to many scalars processed in parallel.
+
+**[Architecture](#5-architecture)** Our micro model just has 4,192 parameters (see the calculations above). GPT prod models have hundreds of billions. Overall it's a very similar looking Transformer neural network, just much wider (embedding dimensions of 10,000+) and much deeper (100+ layers).
+
+Modern LLMs also incorporate a few more types of blocks and change their orders around:
+
+1. RoPE (Rotary Position Embeddings) instead of learned position embeddings
+2. GQA (Grouped Query Attention) to reduce KV cache size
+3. Gated linear activations instead of ReLU
+4. Mixture of Experts (MoE) layers
+5. ...
+
+But the core structure of Attention (cross-token communication) and MLP (computation) interspersed in a residual stream (meaning that the attention and MLP blocks are interleaved along this stream, and they don't replace it) is well-preserved. It's like saying "we're gonna modify x with attention and later with an MLP layer, BUT not much". The residual connection ensures each block only makes a small delta to x. Without it, each block would completely overwrite x with its output.
+
+**[Training](#6-training-loop)** Training a frontier model takes thousands of GPUs running for months. When training deep networks, gradients flow cleanly through the concatenation of the tokens and the residuals back to earlier layers, and each block learns an incremental refinement rather than a full rewrite.
+
+During training, instead of one document per step, production training uses different scale of operations:
+
+1. Large batches (millions of tokens per step)
+2. Gradient accumulation
+3. Mixed precision (float16/bfloat16)
+4. Hyperparameter tuning
+
+
+**[Optimization](#6-training-loop)** In microgpt we used Adam as an optimizer, with a simple linear learning rate decay and that's about it. When running production systems at scale, optimization becomes its own discipline.
+
+As we detail above, models train in reduced precision (bfloat16 or even fp8) and across large GPU clusters for efficiency and this introduces its own numerical challenges. The optimizer settings (learning rate, weight decay, beta parameters, warmup schedule, decay schedule) must be tuned precisely, and the right values depend on model size, batch size, and dataset composition.
+
+Scaling laws (e.g. the [Chinchilla paper](https://arxiv.org/abs/2203.15556)) guide how to allocate a fixed compute budget between model size and number of training tokens. Something goes wrong here, and a company can waste millions of $ of compute, so a lot of small-scale experiments need to be done to predict the right settings before a full run is done.
+
+**Post-training** The "pretrained" model is a document completer, not a chatbot like ChatGPT is. Upgrading to that state, happens in two stages:
+
+1. SFT (Supervised Fine-Tuning): you simply swap the documents for curated conversations and keep training. Algorithmically, nothing changes
+
+2. Second, RL (Reinforcement Learning): the model generates responses, they get scored (judged by humans, another model, or an algorithm), and the model learns from that feedback.
+
+Fundamentally, the model is still training on documents, but those documents are now made up of tokens coming from the model itself.
+
+**[Inference](#7-inference)** This is also a very complex engineering problem. Serving the model to one user like microgpt is not the same as serving to millions.
+There's a whole engineering discipline around it (call it MLOps or MLInfra or both.) It requires caring about:
+
+1. Batching requests together
+2. KV cache management and paging (vLLM, etc.)
+3. Speculative decoding for speed
+4. Quantization (running in int8/int4 instead of float16) to save memory
+5. Distributing the model across multiple GPUs
+6. ...
+
+This is about to make the next token come the fastest we can.
