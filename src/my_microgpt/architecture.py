@@ -10,7 +10,15 @@ KVCache = list[list[list[Value]]]
 
 def linear(x: list[Value], w: Matrix) -> list[Value]:
     """Matrix-vector multiply: one dot product per row of w."""
-    return [sum((wi * xi for wi, xi in zip(wo, x)), Value(0.0)) for wo in w]
+    return [sum((wi * xi for wi, xi in zip(wo, x)), Value(0.0)) for wo in w]  # We need to initialize the sum with a Value(0.0) to avoid type errors.
+    # This is equivalent to the non-list comprehension version:
+    # results: list[Value] = []
+    # for wo in w:
+    #     result = Value(0.0)
+    #     for wi, xi in zip(wo, x):
+    #         result += wi * xi
+    #     results.append(result)
+    # return results
 
 
 def softmax(logits: list[Value]) -> list[Value]:

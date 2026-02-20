@@ -17,6 +17,7 @@ tokenization = "my_microgpt.tokenization:main"
 autograd = "my_microgpt.autograd:main"
 parameters = "my_microgpt.parameters:main"
 architecture = "my_microgpt.architecture:main"
+training = "my_microgpt.training:main"
 
 [build-system]
 requires = ["hatchling"]

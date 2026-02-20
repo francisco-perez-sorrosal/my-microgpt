@@ -15,6 +15,7 @@ It is dissected here for educational purposes.
 3. [Autograd](#3-autograd-the-hardcore-section-that-enables-backprogagation-or-implementing-what-pytorch-gives-you-for-free)
 4. [Parameters](#4-parameters-neurons)
 5. [Architecture](#5-architecture)
+6. [Training Loop](#6-training-loop)
 
 ## 1. Dataset
 
@@ -281,4 +282,53 @@ Run the [`architecture`](src/my_microgpt/architecture.py) module:
 
 ```bash
 uv run architecture
+```
+
+## 6. Training Loop
+
+Let's run our model architecture inside the training loop.
+
+At a glance, each step of the training loop:
+
+1. Picks a document
+2. Runs the model forward over its tokens
+3. Computes a loss
+4. Backpropagates to get gradients
+5. Updates the parameters
+
+### Tokenization
+
+Each document picked is wrapped with BOS on both sides: the name "fran" becomes `[BOS, f, r, a, n, BOS]`. The model's job is to predict each next token given the preceding ones (Remember the Architecture section above).
+
+### Forward Pass and Loss Calculation
+
+Each token is fed through the model one at a time, building up the KV cache as we go. At each position, the model outputs 27 logits; then they are converted to probabilities via softmax. The loss at each position is calculated as the negative log probability of where the correct next token is in the list of predicted tokens: `-log(p(target))`. This is called the **cross-entropy loss** and measures the degree of misprediction: how surprised the model is by what actually comes next. If the model assigns probability 1.0 to the correct token, the loss is 0. If it assigns probability close to 0, the loss goes to infinity. 
+
+Finally, each loss in each token position is sum and averaged across the document to get a single scalar loss.
+
+### Backward Pass
+
+`loss.backward()` executes backpropagation through the entire computation graph, starting from the loss all the way back through softmax, the model, and into every parameter. When this pass finishes, each parameter's `.grad` tells the model how to change it to reduce the loss.
+
+### Adam Optimizer
+
+Simple gradient descent (`p.data -= lr * p.grad`) works but Adam is smarter. It maintains two running averages per parameter:
+
+- `m` — mean of recent gradients (momentum, like a rolling ball)
+- `v` — mean of recent squared gradients (adapts the learning rate per parameter)
+
+The `m_hat` and `v_hat` are bias corrections that account for the zero initialization of `m` and `v`. The learning rate decays linearly over training. After updating, `.grad` is reset to `0` for the next step.
+
+### Training Progress
+
+In our script below, we run over 1,000 steps. We see the loss decrease from around 3.3 (which is implicitly a random guessing among 27 tokens: `-log(1/27) ~ 3.3`) down to around 2.37 depending on the run. The lowest possible is 0 (perfect predictions), so there's room to improve, but the model is clearly learning statistical patterns in names.
+
+I've commented the code in the file very explicitly with the details above.
+
+### Run training
+
+Run the [`training`](src/my_microgpt/training.py) module:
+
+```bash
+uv run training
 ```
