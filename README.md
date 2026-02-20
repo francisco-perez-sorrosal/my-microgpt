@@ -16,8 +16,9 @@ It is dissected here for educational purposes.
 4. [Parameters](#4-parameters-neurons)
 5. [Architecture](#5-architecture)
 6. [Training Loop](#6-training-loop)
-7. [Inference](#7-inference)
-8. [microgpt vs Big GPTs](#8-microgpt-vs-big-gpts)
+7. [Storage](#7-storage)
+8. [Inference](#8-inference)
+9. [microgpt vs Big GPTs](#9-microgpt-vs-big-gpts)
 
 ## 1. Dataset
 
@@ -329,13 +330,28 @@ I've commented the code in the file very explicitly with the details above.
 
 ### Run training
 
-Run the [`training`](src/my_microgpt/training.py) module:
+Run the [`training`](src/my_microgpt/training.py) module. After training completes, the model is saved to a JSON file (see [Storage](#7-storage)):
 
 ```bash
 uv run training
 ```
 
-## 7. Inference
+## 7. Storage
+
+Not part of the original microgpt (which trains and runs inference in a single script), but essential once training and inference are separate steps. Without persistence, every inference run would require retraining from scratch.
+
+The [`storage`](src/my_microgpt/storage.py) module saves and loads a trained model as a single JSON file containing everything needed for inference:
+
+- **config** — the architecture hyperparameters (`n_embd`, `n_head`, `n_layer`, `block_size`)
+- **training** — metadata about how the model was trained (`num_steps`, `final_loss`)
+- **chars** — the tokenizer's character set (from which all mappings are derived)
+- **state_dict** — all weight matrices as 2D arrays of raw floats
+
+Only the raw float values (`Value.data`) are saved — gradients and the autograd computation graph are transient training state, not needed at inference time.
+
+Filenames follow the convention `model_e{n_embd}_h{n_head}_l{n_layer}_s{num_steps}.json` so we can distinguish different training runs at a glance.
+
+## 8. Inference
 
 After training we have our model ready to test. The parameters are frozen and are not going to be modified in the next step; Inference exercises only forward pass run in a loop: each generated token is fed back as the next input.
 
@@ -352,13 +368,13 @@ Temperature divides the logits before the softmax:
 
 ### Run inference
 
-Run the [`inference`](src/my_microgpt/inference.py) module:
+Run the [`inference`](src/my_microgpt/inference.py) module, passing the path to a saved model (defaults to `model.json`):
 
 ```bash
-uv run inference
+uv run inference model_e16_h4_l1_s1000.json
 ```
 
-## 8. microgpt vs Big GPTs
+## 9. microgpt vs Big GPTs
 
 The goal of microgpt is reproduce the core of the algorithm behind GPT models.
 
@@ -406,7 +422,7 @@ Scaling laws (e.g. the [Chinchilla paper](https://arxiv.org/abs/2203.15556)) gui
 
 Fundamentally, the model is still training on documents, but those documents are now made up of tokens coming from the model itself.
 
-**[Inference](#7-inference)** This is also a very complex engineering problem. Serving the model to one user like microgpt is not the same as serving to millions.
+**[Inference](#8-inference)** This is also a very complex engineering problem. Serving the model to one user like microgpt is not the same as serving to millions.
 There's a whole engineering discipline around it (call it MLOps or MLInfra or both.) It requires caring about:
 
 1. Batching requests together

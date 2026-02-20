@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from my_microgpt.architecture import gpt, make_kv_cache, softmax
 from my_microgpt.parameters import ModelParameters
 from my_microgpt.tokenization import Tokenizer
-from my_microgpt.training import TrainConfig, train
 
 DEFAULT_TEMPERATURE = 0.5
 DEFAULT_NUM_SAMPLES = 20
@@ -16,8 +15,8 @@ DEFAULT_NUM_SAMPLES = 20
 class InferenceConfig:
     """Inference hyperparameters."""
 
-    temperature: float = DEFAULT_TEMPERATURE  # Temperature controls randomness: lower values are more conservative, higher values produce more diverse output.
-    num_samples: int = DEFAULT_NUM_SAMPLES  # Number of samples (names in this case)to generate.
+    temperature: float = DEFAULT_TEMPERATURE  # controls randomness: lower = conservative, higher = diverse
+    num_samples: int = DEFAULT_NUM_SAMPLES  # number of samples (names) to generate
 
 
 def sample_token(probs: list[float]) -> int:
@@ -47,7 +46,7 @@ def generate(
         # Divide logits by temperature before softmax to control randomness
         probs = softmax([logit / temperature for logit in logits])
         token_id = sample_token([p.data for p in probs])
-        if token_id == tok.bos:  # If the model produces BOS again, we stop generating before reaching the maximum length.
+        if token_id == tok.bos:  # BOS again means "I'm done"
             break
         chars.append(tok.id_to_char[token_id])
 
@@ -73,18 +72,14 @@ def inference(
 
 
 def main() -> None:
-    from my_microgpt.dataset import load_docs
+    import sys
 
-    dataset = load_docs()
-    tok = Tokenizer.from_docs(dataset)
-    model = ModelParameters.create(tok.vocab_size)
-    print(model)
+    from my_microgpt.storage import load_model
 
-    # Train first
-    train_cfg = TrainConfig(num_steps=1000)
-    train(dataset, tok, model, train_cfg)
-
-    # Then generate
+    # Load a previously trained model — no dataset or training needed
+    path = sys.argv[1] if len(sys.argv) > 1 else "model.json"
+    model, tok, _info = load_model(path)
+    print(f"Model loaded from {path}. Info: {_info}")
     inference(model, tok)
 
 

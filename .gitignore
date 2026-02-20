@@ -12,5 +12,8 @@ wheels/
 # Downloaded data
 input.txt
 
+# Trained model artifacts
+model*.json
+
 # Agent pipeline intermediates
 .ai-work/

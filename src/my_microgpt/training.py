@@ -58,6 +58,14 @@ class TrainConfig:
     learning_rate: float = DEFAULT_LEARNING_RATE
 
 
+@dataclass
+class TrainingInfo:
+    """Metadata about how a model was trained. Saved alongside the weights."""
+
+    num_steps: int
+    final_loss: float
+
+
 def train_step(
     doc: str,
     tok: Tokenizer,
@@ -79,7 +87,7 @@ def train_step(
 
     # Forward pass: build computation graph from tokens to loss
     # Fresh KV cache per step — each document is an independent sequence.
-    # Check gpt() to see how it mutates it in place (append), so it accumulates context across positions within the loop.
+    # gpt() mutates it in place (append), so it accumulates context across positions within the loop.
     keys, values = make_kv_cache(cfg)
     losses: list[Value] = []
     for pos_id in range(n):
@@ -88,9 +96,8 @@ def train_step(
         probs = softmax(logits)
         loss_t = -probs[target_id].log()  # cross-entropy: -log(p(correct token))
         losses.append(loss_t)
-        
-    
-    loss = (1 / n) * sum(losses, Value(0.0))  # average loss over the document; We need to initialize the sum with a Value(0.0) to avoid type errors
+
+    loss = (1 / n) * sum(losses, Value(0.0))  # average loss over the document
 
     # Backward pass: compute gradients for all parameters
     loss.backward()
@@ -125,15 +132,20 @@ def train(
 
 def main() -> None:
     from my_microgpt.dataset import load_docs
+    from my_microgpt.storage import save_model
 
     dataset = load_docs()
     tok = Tokenizer.from_docs(dataset)
     model = ModelParameters.create(tok.vocab_size)
     print(model)
 
-    train_cfg = TrainConfig(num_steps=1000)  # small run for demo
+    train_cfg = TrainConfig(num_steps=1000)
     losses = train(dataset, tok, model, train_cfg)
     print(f"\nloss: {losses[0]:.4f} -> {losses[-1]:.4f}")
+
+    # Save the trained model so inference can load it without retraining
+    info = TrainingInfo(num_steps=train_cfg.num_steps, final_loss=losses[-1])
+    save_model(model, tok, info)
 
 
 if __name__ == "__main__":
