@@ -1,5 +1,6 @@
 """Training loop for microgpt: forward pass, cross-entropy loss, backpropagation, and Adam optimizer."""
 
+import argparse
 from dataclasses import dataclass
 
 from my_microgpt.architecture import gpt, make_kv_cache, softmax
@@ -130,22 +131,50 @@ def train(
     return losses
 
 
+def parse_args() -> argparse.Namespace:
+    """Parse training CLI arguments."""
+    from my_microgpt.dataset import DEFAULT_INPUT_PATH
+
+    parser = argparse.ArgumentParser(description="Train microgpt on a text dataset")
+    parser.add_argument(
+        "--num-steps", type=int, default=-1,
+        help="training steps; -1 (default) = one epoch over the dataset",
+    )
+    parser.add_argument(
+        "--input", type=str, default=DEFAULT_INPUT_PATH,
+        help=f"path to the input dataset (default: {DEFAULT_INPUT_PATH})",
+    )
+    parser.add_argument(
+        "--output", type=str, default=None,
+        help="path to save the trained model (default: auto-generated from config)",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
     from my_microgpt.dataset import load_docs
     from my_microgpt.storage import save_model
 
-    dataset = load_docs()
+    args = parse_args()
+
+    dataset = load_docs(path=args.input)
     tok = Tokenizer.from_docs(dataset)
     model = ModelParameters.create(tok.vocab_size)
     print(model)
 
-    train_cfg = TrainConfig(num_steps=1000)
+    # Default: one epoch (single pass over the dataset); up to ~4 epochs is
+    # acceptable for small high-quality subsets.
+    # Standard LLM pre-training practice.
+    # Chinchilla scaling laws assume each token is seen once. LLaMA trained most data
+    # at ~1 epoch. GPT-3 varied by subset quality (0.4-3.4 epochs).
+    num_steps = len(dataset) if args.num_steps == -1 else args.num_steps
+    train_cfg = TrainConfig(num_steps=num_steps)
     losses = train(dataset, tok, model, train_cfg)
     print(f"\nloss: {losses[0]:.4f} -> {losses[-1]:.4f}")
 
     # Save the trained model so inference can load it without retraining
     info = TrainingInfo(num_steps=train_cfg.num_steps, final_loss=losses[-1])
-    save_model(model, tok, info)
+    save_model(model, tok, info, path=args.output)
 
 
 if __name__ == "__main__":
