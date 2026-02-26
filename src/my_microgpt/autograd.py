@@ -1,6 +1,7 @@
 """Autograd engine for my microgpt: scalar-valued automatic differentiation. This is what Pytorch provides for free under the hood."""
 
 import math
+from contextlib import contextmanager
 
 
 class Value:
@@ -8,11 +9,33 @@ class Value:
 
     __slots__ = ("data", "grad", "_children", "_local_grads")
 
+    _no_grad = False  # class-level flag: when True, skip graph construction
+
     def __init__(self, data: float, children: tuple["Value", ...] = (), local_grads: tuple[float, ...] = ()):
         self.data: float = data  # forward pass: scalar value calculated for this node
         self.grad: float = 0.0  # backward pass: gradient (derivative) of the loss with respect to this node's output (0.0 by default)
-        self._children: tuple["Value", ...] = children  # list of child nodes that contribute to this node's output
-        self._local_grads: tuple[float, ...] = local_grads  # local gradients (derivatives) of this node's output with respect to each child's input
+        if Value._no_grad:
+            self._children: tuple["Value", ...] = ()
+            self._local_grads: tuple[float, ...] = ()
+        else:
+            self._children = children  # list of child nodes that contribute to this node's output
+            self._local_grads = local_grads  # local gradients (derivatives) of this node's output with respect to each child's input
+
+    @staticmethod
+    @contextmanager
+    def no_grad():
+        """Context manager to disable computation graph construction.
+
+        Operations still return Value objects but without graph connections,
+        making forward passes faster when gradients aren't needed (e.g. inference,
+        activation extraction). This is the same concept as PyTorch's torch.no_grad().
+        """
+        old = Value._no_grad
+        Value._no_grad = True
+        try:
+            yield
+        finally:
+            Value._no_grad = old
 
     def __add__(self, other: "Value | float") -> "Value":
         other = other if isinstance(other, Value) else Value(other)
@@ -60,16 +83,22 @@ class Value:
         topo: list[Value] = []
         visited: set[int] = set()
 
-        def build_topo(v: Value) -> None:
-            """Build a topological order of the computation graph."""
-            # If we haven't visited this node yet, add it to the visited set and recursively add its children to the topological order.
-            if id(v) not in visited:
-                visited.add(id(v))
-                for child in v._children:
-                    build_topo(child)
-                topo.append(v)
-
-        build_topo(self)
+        # Iterative topological sort (avoids recursion-depth limits on larger models)
+        stack: list[tuple[Value, int]] = [(self, 0)]
+        while stack:
+            node, idx = stack[-1]
+            if id(node) in visited:
+                stack.pop()
+                continue
+            if idx < len(node._children):
+                stack[-1] = (node, idx + 1)
+                child = node._children[idx]
+                if id(child) not in visited:
+                    stack.append((child, 0))
+            else:
+                visited.add(id(node))
+                topo.append(node)
+                stack.pop()
         self.grad = 1.0
         for v in reversed (topo):
             for child, local_grad in zip(v._children, v._local_grads):

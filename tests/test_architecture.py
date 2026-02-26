@@ -67,3 +67,99 @@ def test_gpt_logits_are_differentiable():
     # At least some parameters should have non-zero gradients
     grads = [p.grad for p in model.params]
     assert any(g != 0.0 for g in grads)
+
+
+# --- post_mlp_hook ---
+
+
+def test_gpt_no_hook_matches_default():
+    """Passing post_mlp_hook=None produces the same logits as omitting it."""
+    cfg = ModelConfig(n_embd=4, n_head=2, n_layer=2, block_size=4)
+    model = ModelParameters.create(5, cfg)
+    keys1, vals1 = make_kv_cache(cfg)
+    keys2, vals2 = make_kv_cache(cfg)
+    logits_default = gpt(0, 0, model, keys1, vals1)
+    logits_none = gpt(0, 0, model, keys2, vals2, post_mlp_hook=None)
+    for a, b in zip(logits_default, logits_none):
+        assert a.data == b.data
+
+
+def test_hook_fires_at_every_layer():
+    """The hook is called once per layer with the correct layer index."""
+    cfg = ModelConfig(n_embd=4, n_head=2, n_layer=3, block_size=4)
+    model = ModelParameters.create(5, cfg)
+    keys, vals = make_kv_cache(cfg)
+    fired_layers: list[int] = []
+
+    def record_hook(x: list[Value], li: int) -> list[Value]:
+        fired_layers.append(li)
+        return x
+
+    gpt(0, 0, model, keys, vals, post_mlp_hook=record_hook)
+    assert fired_layers == [0, 1, 2]
+
+
+def test_hook_can_capture_residual_stream():
+    """A capture hook reads the residual stream without modifying logits."""
+    cfg = ModelConfig(n_embd=4, n_head=2, n_layer=2, block_size=4)
+    model = ModelParameters.create(5, cfg)
+    captured: list[list[float]] = []
+
+    def capture_hook(x: list[Value], li: int) -> list[Value]:
+        if li == 1:  # capture at last layer
+            captured.append([v.data for v in x])
+        return x  # pass-through
+
+    keys1, vals1 = make_kv_cache(cfg)
+    logits_hooked = gpt(0, 0, model, keys1, vals1, post_mlp_hook=capture_hook)
+
+    keys2, vals2 = make_kv_cache(cfg)
+    logits_plain = gpt(0, 0, model, keys2, vals2)
+
+    # Captured one vector of the right dimension
+    assert len(captured) == 1
+    assert len(captured[0]) == cfg.n_embd
+
+    # Pass-through hook doesn't change logits
+    for a, b in zip(logits_hooked, logits_plain):
+        assert a.data == b.data
+
+
+def test_hook_can_modify_residual_stream():
+    """An injection hook changes the logits."""
+    cfg = ModelConfig(n_embd=4, n_head=2, n_layer=2, block_size=4)
+    model = ModelParameters.create(5, cfg)
+
+    def inject_hook(x: list[Value], li: int) -> list[Value]:
+        if li == 1:
+            return [xi + 10.0 for xi in x]  # large perturbation
+        return x
+
+    keys1, vals1 = make_kv_cache(cfg)
+    logits_plain = gpt(0, 0, model, keys1, vals1)
+
+    keys2, vals2 = make_kv_cache(cfg)
+    logits_steered = gpt(0, 0, model, keys2, vals2, post_mlp_hook=inject_hook)
+
+    # Logits should differ after injection
+    diffs = [abs(a.data - b.data) for a, b in zip(logits_plain, logits_steered)]
+    assert max(diffs) > 0.01
+
+
+def test_no_grad_with_hook_produces_same_logits():
+    """Value.no_grad() + hook produces the same .data as normal gpt() + hook."""
+    cfg = ModelConfig(n_embd=4, n_head=2, n_layer=2, block_size=4)
+    model = ModelParameters.create(5, cfg)
+
+    def passthrough(x: list[Value], li: int) -> list[Value]:
+        return x
+
+    keys1, vals1 = make_kv_cache(cfg)
+    logits_grad = gpt(0, 0, model, keys1, vals1, post_mlp_hook=passthrough)
+
+    keys2, vals2 = make_kv_cache(cfg)
+    with Value.no_grad():
+        logits_nograd = gpt(0, 0, model, keys2, vals2, post_mlp_hook=passthrough)
+
+    for a, b in zip(logits_grad, logits_nograd):
+        assert abs(a.data - b.data) < 1e-10
