@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from my_microgpt.architecture import gpt, make_kv_cache, softmax
 from my_microgpt.autograd import Value
-from my_microgpt.parameters import ModelParameters
+from my_microgpt.parameters import ModelConfig, ModelParameters
 from my_microgpt.tokenization import Tokenizer
 
 DEFAULT_NUM_STEPS = 1000
@@ -137,6 +137,18 @@ def parse_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(description="Train microgpt on a text dataset")
     parser.add_argument(
+        "--n-embd", type=int, default=16,
+        help="embedding dimension (default: 16)",
+    )
+    parser.add_argument(
+        "--n-head", type=int, default=4,
+        help="number of attention heads (default: 4)",
+    )
+    parser.add_argument(
+        "--n-layer", type=int, default=3,
+        help="number of layers (default: 3)",
+    )
+    parser.add_argument(
         "--num-steps", type=int, default=-1,
         help="training steps; -1 (default) = one epoch over the dataset",
     )
@@ -159,7 +171,8 @@ def main() -> None:
 
     dataset = load_docs(path=args.input)
     tok = Tokenizer.from_docs(dataset)
-    model = ModelParameters.create(tok.vocab_size)
+    model_config = ModelConfig(n_embd=args.n_embd, n_head=args.n_head, n_layer=args.n_layer)
+    model = ModelParameters.create(tok.vocab_size, model_config)
     print(model)
 
     # Default: one epoch (single pass over the dataset); up to ~4 epochs is

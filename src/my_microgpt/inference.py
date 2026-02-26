@@ -1,14 +1,16 @@
 """Inference for microgpt: sample new names from a trained model."""
 
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from my_microgpt.architecture import gpt, make_kv_cache, softmax
+from my_microgpt.autograd import Value
 from my_microgpt.parameters import ModelParameters
 from my_microgpt.tokenization import Tokenizer
 
 DEFAULT_TEMPERATURE = 0.5
-DEFAULT_NUM_SAMPLES = 20
+DEFAULT_NUM_SAMPLES = 3781
 
 
 @dataclass
@@ -28,6 +30,7 @@ def generate(
     model: ModelParameters,
     tok: Tokenizer,
     temperature: float = DEFAULT_TEMPERATURE,
+    post_mlp_hook: Callable[[list[Value], int], list[Value]] | None = None,
 ) -> str:
     """Generate a single name from the model.
 
@@ -35,6 +38,9 @@ def generate(
     and stops when the model produces BOS again or hits block_size.
     Temperature controls randomness: lower values are more conservative,
     higher values produce more diverse output.
+
+    The optional post_mlp_hook is passed through to gpt() — used by steered
+    inference to inject concept vectors into the residual stream.
     """
     cfg = model.config
     keys, values = make_kv_cache(cfg)
@@ -42,7 +48,7 @@ def generate(
     chars: list[str] = []
 
     for pos_id in range(cfg.block_size):
-        logits = gpt(token_id=token_id, pos_id=pos_id, model=model, keys=keys, values=values)
+        logits = gpt(token_id=token_id, pos_id=pos_id, model=model, keys=keys, values=values, post_mlp_hook=post_mlp_hook)
         # Divide logits by temperature before softmax to control randomness
         probs = softmax([logit / temperature for logit in logits])
         token_id = sample_token([p.data for p in probs])
@@ -72,15 +78,24 @@ def inference(
 
 
 def main() -> None:
-    import sys
+    import argparse
 
     from my_microgpt.storage import load_model
 
-    # Load a previously trained model — no dataset or training needed
-    path = sys.argv[1] if len(sys.argv) > 1 else "model.json"
-    model, tok, _info = load_model(path)
-    print(f"Model loaded from {path}. Info: {_info}")
-    inference(model, tok)
+    parser = argparse.ArgumentParser(description="Generate names from a trained microgpt model")
+    parser.add_argument("--model", type=str, default="model.json", help="path to the trained model JSON (default: model.json)")
+    parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE, help="sampling temperature")
+    parser.add_argument("--num-samples", type=int, default=DEFAULT_NUM_SAMPLES, help="number of names to generate (default: 3781)")
+    parser.add_argument("--concept", type=str, default="fran", help="substring to count in generated names (default: fran)")
+    args = parser.parse_args()
+
+    model, tok, _info = load_model(args.model)
+    print(f"Model loaded from {args.model}. Info: {_info}")
+    samples = inference(model, tok, InferenceConfig(temperature=args.temperature, num_samples=args.num_samples))
+
+    concept = args.concept.lower()
+    matches = sum(1 for s in samples if concept in s.lower())
+    print(f"\n-> {matches}/{len(samples)} contain '{args.concept}' ({matches / len(samples) * 100:.1f}%)")
 
 
 if __name__ == "__main__":

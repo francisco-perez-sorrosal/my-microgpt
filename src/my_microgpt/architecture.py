@@ -1,5 +1,7 @@
 """GPT-2-like architecture for microgpt: stateless forward pass with KV cache."""
 
+from collections.abc import Callable
+
 from my_microgpt.autograd import Value
 from my_microgpt.parameters import Matrix, ModelConfig, ModelParameters
 
@@ -42,6 +44,7 @@ def gpt(
     model: ModelParameters,
     keys: KVCache,
     values: KVCache,
+    post_mlp_hook: Callable[[list[Value], int], list[Value]] | None = None,
 ) -> list[Value]:
     """Forward pass for a single token. Returns logits over the vocabulary.
 
@@ -52,6 +55,10 @@ def gpt(
     NOTE: keys and values are mutated in place — each call appends the current
     token's K/V vectors to the cache. Callers must pass the same cache objects
     across sequential calls to maintain context between positions.
+
+    The optional post_mlp_hook is called after each layer's MLP residual add with
+    (residual_stream, layer_index) and returns the (possibly modified) residual stream.
+    Used for activation capture (concept extraction) and injection (steered inference).
     """
     sd = model.state_dict
     cfg = model.config
@@ -101,6 +108,9 @@ def gpt(
         x = [xi.relu() for xi in x]
         x = linear(x, sd[f"layer{li}.mlp_fc2"])  # Second MLP Projection. Dimension: n_embd x 4 * n_embd
         x = [a + b for a, b in zip(x, x_residual)]  # Residual connection. Dimension: n_embd
+
+        if post_mlp_hook is not None:
+            x = post_mlp_hook(x, li)
 
     return linear(x, sd["lm_head"])  # Output Projection. Dimension: vocab_size x n_embd
 
